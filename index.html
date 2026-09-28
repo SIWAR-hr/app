@@ -30,6 +30,11 @@
   @keyframes s{to{transform:rotate(360deg)}}
   [hidden]{display:none!important}
   .sub{margin:-6px 0 8px;color:var(--grey);font-size:14px}
+  .btn:disabled{opacity:.7;cursor:default}
+  .st{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:20px;max-width:420px;width:100%}
+  .st b{display:block;font-size:15px;margin-bottom:4px}
+  .st.ok{border-color:#BBE3C8;background:#F2FBF5}
+  .st .spin{margin:0 auto 12px}
 </style>
 </head>
 <body>
@@ -45,10 +50,12 @@
   <section id="setup" hidden>
     <p>ثبّت النظام على جهازك ليفتح من أيقونته مباشرة.</p>
     <button class="btn" id="installBtn" hidden>📲 تثبيت التطبيق</button>
+    <!-- حالة التثبيت: المتصفح يثبّت في الخلفية وقد يأخذ دقيقة — فتظهر هنا حتى يكتمل -->
+    <div class="st" id="inst" hidden><div class="spin" id="instSpin"></div><b id="instT"></b><p id="instP"></p></div>
     <div class="card" id="ios" hidden><b>على الآيفون والآيباد (Safari)</b>
       <ol><li>اضغط زر المشاركة <span aria-hidden="true">⬆︎</span> أسفل الشاشة</li><li>اختر «إضافة إلى الشاشة الرئيسية»</li><li>اضغط «إضافة»</li></ol></div>
     <div class="card" id="android" hidden><b>على أندرويد (Chrome)</b>
-      <ol><li>اضغط القائمة ⋮ أعلى الشاشة</li><li>اختر «تثبيت التطبيق» أو «إضافة إلى الشاشة الرئيسية»</li></ol></div>
+      <ol><li>اضغط القائمة ⋮ أعلى الشاشة</li><li>اختر «تثبيت التطبيق» أو «إضافة إلى الشاشة الرئيسية»</li><li>انتظر رسالة «تم التثبيت» — قد يأخذ دقيقة أو اثنتين</li></ol></div>
     <div class="card" id="desktop" hidden><b>على الكمبيوتر (Chrome أو Edge)</b>
       <ol><li>اضغط رمز التثبيت في شريط العنوان، أو القائمة ⋮ ← «حفظ ومشاركة» ← «تثبيت الصفحة كتطبيق»</li><li>يظهر النظام في قائمة البرامج وعلى سطح المكتب</li></ol></div>
     <a class="btn ghost" id="openNow" href="#">فتح النظام الآن</a>
@@ -75,7 +82,7 @@
   var standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
   var ua = navigator.userAgent || '', ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && 'ontouchend' in document), android = /Android/.test(ua);
   var $ = function (id) { return document.getElementById(id); };
-  if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js'); } catch (e) {} }
+  if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js').catch(function () {}); } catch (e) {} }
   if (!link) { $('none').hidden = false; return; }
   $('goNow').href = link; $('openNow').href = link;
   // من الأيقونة (وضع التطبيق): افتح النظام مباشرة
@@ -84,10 +91,39 @@
   $('setup').hidden = false;
   if (ios) { $('ios').hidden = false; var mf = $('mf'); if (mf) mf.parentNode.removeChild(mf); }   // الآيفون يثبّت عنوان الصفحة نفسه (بالرابط)
   else if (android) $('android').hidden = false; else $('desktop').hidden = false;
-  var deferred = null;
-  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferred = e; $('installBtn').hidden = false; });
-  $('installBtn').addEventListener('click', function () { if (!deferred) return; deferred.prompt(); deferred.userChoice.then(function () { deferred = null; $('installBtn').hidden = true; }); });
-  window.addEventListener('appinstalled', function () { $('installBtn').hidden = true; });
+  var deferred = null, IK = 'ev_installing', slowT = null;
+  var cards = function (show) { ['ios', 'android', 'desktop'].forEach(function (k) { if (!show) $(k).hidden = true; }); if (show) { if (ios) $('ios').hidden = false; else if (android) $('android').hidden = false; else $('desktop').hidden = false; } };
+  var state = function (k) {   // installing · slow · done · cancel
+    var T = {
+      installing: ['⏳ جارٍ تثبيت التطبيق…', 'لا تغلق هذه الصفحة — ' + (android ? 'الجوال يجهّز الأيقونة وقد يأخذ دقيقة أو اثنتين.' : 'يأخذ ثواني.')],
+      slow: ['⏳ التثبيت ما زال جاريًا…', 'بعض الأجهزة تأخذ وقتًا أطول. إن ظهرت أيقونة «كوادر» على ' + (android || ios ? 'الشاشة الرئيسية' : 'سطح المكتب') + ' فالتثبيت اكتمل.'],
+      done: ['✅ تم تثبيت التطبيق', 'تجده باسم «كوادر» على ' + (android || ios ? 'الشاشة الرئيسية' : 'سطح المكتب وفي قائمة البرامج') + ' — افتح النظام منه من الآن.'],
+      cancel: ['لم يكتمل التثبيت', 'أُلغي من نافذة التثبيت — تقدر تثبّته في أي وقت بالخطوات التالية.']
+    }[k];
+    $('inst').hidden = false; $('inst').className = 'st' + (k === 'done' ? ' ok' : '');
+    $('instSpin').hidden = !(k === 'installing' || k === 'slow');
+    $('instT').textContent = T[0]; $('instP').textContent = T[1];
+    $('installBtn').hidden = true;
+    cards(k === 'cancel');
+    clearTimeout(slowT);
+    if (k === 'installing') slowT = setTimeout(function () { state('slow'); }, 45000);
+    try { if (k === 'installing') localStorage.setItem(IK, String(Date.now())); else localStorage.removeItem(IK); } catch (e) {}
+  };
+  // رجع للصفحة والتثبيت بدأ منذ دقائق قليلة: تبقى الحالة ظاهرة حتى يكتمل
+  try { var t0 = Number(localStorage.getItem(IK) || 0); if (t0 && Date.now() - t0 < 5 * 60000) state('slow'); else localStorage.removeItem(IK); } catch (e) {}
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault(); deferred = e;
+    if (!$('inst').hidden && $('inst').className === 'st') { $('inst').hidden = true; cards(true); try { localStorage.removeItem(IK); } catch (x) {} } // المتصفح يعرض التثبيت من جديد = لم يكتمل السابق
+    $('installBtn').hidden = false; $('installBtn').disabled = false; $('installBtn').textContent = '📲 تثبيت التطبيق';
+  });
+  $('installBtn').addEventListener('click', function () {
+    if (!deferred) return;
+    var b = $('installBtn'); b.disabled = true; b.textContent = '⏳ جارٍ فتح نافذة التثبيت…';
+    deferred.prompt();
+    deferred.userChoice.then(function (c) { deferred = null; state(c && c.outcome === 'accepted' ? 'installing' : 'cancel'); })
+      .catch(function () { deferred = null; state('cancel'); });
+  });
+  window.addEventListener('appinstalled', function () { deferred = null; state('done'); });
 })();
 </script>
 </body>
