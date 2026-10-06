@@ -44,7 +44,13 @@
   <p class="sub">نظام التوظيف والتقييم</p>
 
   <!-- فتح النظام (من الأيقونة أو بعد الحفظ) -->
-  <section id="go" hidden><p>جارٍ فتح النظام…</p><div class="spin"></div><a class="btn ghost" id="goNow" href="#">فتح الآن</a></section>
+  <section id="go" hidden><p id="goT">جارٍ فتح النظام…</p><div class="spin" id="goSpin"></div>
+    <div class="st" id="fail" hidden><b>تعذّر الوصول إلى النظام من داخل التطبيق</b>
+      <p>الجوال لم يصل لخوادم جوجل الآن. Chrome العادي يفتحه عادةً — اختر:</p>
+      <button class="btn" id="retry">↻ حاول مرة أخرى</button>
+      <a class="btn ghost" id="inChrome" href="#">🌐 افتح في Chrome</a>
+      <label style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:14px;font-size:13px;color:var(--grey)"><input type="checkbox" id="always"> افتحه دائمًا في Chrome من هذه الأيقونة</label></div>
+    <a class="btn ghost" id="goNow" href="#">فتح الآن</a></section>
 
   <!-- أول مرة: من زر «تطبيق الجوال» داخل النظام -->
   <section id="setup" hidden>
@@ -85,8 +91,34 @@
   if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('sw.js').catch(function () {}); } catch (e) {} }
   if (!link) { $('none').hidden = false; return; }
   $('goNow').href = link; $('openNow').href = link;
-  // من الأيقونة (وضع التطبيق): افتح النظام مباشرة
-  if (standalone) { $('go').hidden = false; setTimeout(function () { location.replace(link); }, 150); return; }
+  // من الأيقونة (وضع التطبيق): يتأكد أولًا أن خوادم جوجل متاحة (حتى 3 محاولات) ثم يفتح النظام — وإلا يعرض البدائل بدل صفحة الخطأ
+  if (standalone) {
+    $('go').hidden = false;
+    var CK = 'ev_open_chrome';
+    var chromeUrl = android ? 'intent://' + link.replace(/^https:\/\//, '') + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(link) + ';end' : link;
+    $('inChrome').href = chromeUrl;
+    $('inChrome').addEventListener('click', function () { if ($('always').checked) { try { localStorage.setItem(CK, '1'); } catch (e) {} } });
+    var always = false; try { always = localStorage.getItem(CK) === '1'; } catch (e) {}
+    if (always && android) { $('goT').textContent = 'جارٍ فتح النظام في Chrome…'; location.href = chromeUrl; return; }
+    var tries = 0;
+    var ping = function () {
+      tries++;
+      $('fail').hidden = true; $('goSpin').hidden = false; $('goNow').hidden = false;
+      $('goT').textContent = tries > 1 ? 'جارٍ المحاولة ' + tries + ' من 3…' : 'جارٍ فتح النظام…';
+      var done = false, ctl = null; try { ctl = new AbortController(); } catch (e) {}
+      var t = setTimeout(function () { if (done) return; done = true; try { ctl && ctl.abort(); } catch (e) {} next(); }, 7000);
+      fetch('https://script.google.com/favicon.ico?t=' + Date.now(), { mode: 'no-cors', cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+        .then(function () { if (done) return; done = true; clearTimeout(t); location.replace(link); })
+        .catch(function () { if (done) return; done = true; clearTimeout(t); next(); });
+    };
+    var next = function () {
+      if (tries < 3) { setTimeout(ping, tries * 1500); return; }
+      $('goSpin').hidden = true; $('goNow').hidden = true; $('goT').textContent = ''; $('fail').hidden = false;
+    };
+    $('retry').addEventListener('click', function () { tries = 0; ping(); });
+    ping();
+    return;
+  }
   // من المتصفح أول مرة: خطوات التثبيت لهذا الجهاز
   $('setup').hidden = false;
   if (ios) { $('ios').hidden = false; var mf = $('mf'); if (mf) mf.parentNode.removeChild(mf); }   // الآيفون يثبّت عنوان الصفحة نفسه (بالرابط)
